@@ -9,3 +9,5 @@ Route::get('/', fn () => response()->json([
     'version' => '1.0.0-dev',
     'status' => 'running',
 ]));
+
+Route::view('/pos', 'pos.index');
