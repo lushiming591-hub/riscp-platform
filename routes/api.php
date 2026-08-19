@@ -25,12 +25,19 @@ Route::prefix('v1')->group(function (): void {
             'tenant_id' => ['required', 'uuid'],
             'store_id' => ['required', 'uuid'],
             'order_no' => ['required', 'string', 'max:64'],
+            'table_id' => ['nullable', 'uuid'],
             'items' => ['required', 'array', 'min:1'],
             'items.*.sku_id' => ['required', 'uuid'],
             'items.*.quantity' => ['required', 'numeric', 'gt:0'],
             'items.*.unit_price' => ['nullable', 'numeric', 'gte:0'],
         ]);
-        $orderId = app(PosOrderService::class)->create($data['tenant_id'], $data['store_id'], $data['order_no'], $data['items']);
+        $orderId = app(PosOrderService::class)->create(
+            $data['tenant_id'],
+            $data['store_id'],
+            $data['order_no'],
+            $data['items'],
+            $data['table_id'] ?? null,
+        );
         return response()->json(['success' => true, 'order_id' => $orderId], 201);
     });
 });
