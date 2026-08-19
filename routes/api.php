@@ -7,6 +7,7 @@ use App\Core\Restaurant\MenuController;
 use App\Core\Restaurant\TableService;
 use App\Core\Restaurant\KitchenTicketController;
 use App\Core\Payments\PaymentAdminController;
+use App\Core\Payments\PaymentTransactionController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -16,17 +17,17 @@ Route::prefix('v1')->group(function (): void {
     Route::get('/admin/payments/providers', [PaymentAdminController::class, 'providers']);
     Route::get('/admin/payments/accounts', [PaymentAdminController::class, 'accounts']);
     Route::post('/admin/payments/routes', [PaymentAdminController::class, 'route']);
+    Route::post('/payments/transactions', [PaymentTransactionController::class, 'create']);
+    Route::post('/payments/transactions/{transactionId}/webhook', [PaymentTransactionController::class, 'webhook']);
 
     Route::post('/restaurant/tables/{tableId}/occupy', function (Request $request, string $tableId) {
         app(TableService::class)->occupy((string) $request->input('tenant_id'), $tableId, (string) $request->input('order_id'));
         return response()->json(['success' => true]);
     });
-
     Route::post('/restaurant/tables/{tableId}/release', function (Request $request, string $tableId) {
         app(TableService::class)->release((string) $request->input('tenant_id'), $tableId);
         return response()->json(['success' => true]);
     });
-
     Route::post('/restaurant/orders', function (Request $request) {
         $data = $request->validate([
             'tenant_id' => ['required', 'uuid'], 'store_id' => ['required', 'uuid'], 'order_no' => ['required', 'string', 'max:64'],
@@ -36,7 +37,6 @@ Route::prefix('v1')->group(function (): void {
         $orderId = app(PosOrderService::class)->create($data['tenant_id'], $data['store_id'], $data['order_no'], $data['items'], $data['table_id'] ?? null);
         return response()->json(['success' => true, 'order_id' => $orderId], 201);
     });
-
     Route::post('/restaurant/kitchen-tickets/{ticketId}/start', [KitchenTicketController::class, 'start']);
     Route::post('/restaurant/kitchen-tickets/{ticketId}/complete', [KitchenTicketController::class, 'complete']);
 });
