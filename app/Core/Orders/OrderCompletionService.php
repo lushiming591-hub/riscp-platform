@@ -12,7 +12,7 @@ final class OrderCompletionService
     public function complete(string $tenantId, string $storeId, string $warehouseId, string $orderId): void
     {
         DB::transaction(function () use ($tenantId, $storeId, $warehouseId, $orderId): void {
-            $order = DB::table('orders')->where('id', $orderId)->where('tenant_id', $tenantId)->lockForUpdate()->first();
+            $order = DB::table('orders')->where('id', $orderId)->where('tenant_id', $tenantId)->where('store_id', $storeId)->lockForUpdate()->first();
             if (!$order) throw new \RuntimeException('Order not found.');
             if ($order->status === 'completed') return;
             if ($order->status !== 'paid') throw new \RuntimeException('Only paid orders can be completed.');
