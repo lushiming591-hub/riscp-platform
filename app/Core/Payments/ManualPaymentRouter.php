@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Core\Payments;
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 final class ManualPaymentRouter
 {
@@ -16,6 +17,7 @@ final class ManualPaymentRouter
                 ->where('tenant_id', $tenantId)
                 ->where('store_id', $storeId)
                 ->where('status', 'active')
+                ->lockForUpdate()
                 ->first();
 
             if (!$channel) throw new \RuntimeException('Payment channel is not active or does not belong to this store.');
@@ -30,19 +32,34 @@ final class ManualPaymentRouter
             if (!$order) throw new \RuntimeException('Order not found.');
             if ($order->status !== 'pending') throw new \RuntimeException('Only pending orders can be routed to payment.');
 
+            $amount = (float) $order->total_amount;
+            $feeAmount = round($amount * (float) $channel->fee_rate / 100, 2);
+            $paymentId = (string) Str::uuid();
+
+            DB::table('payments')->insert([
+                'id' => $paymentId,
+                'tenant_id' => $tenantId,
+                'order_id' => $orderId,
+                'status' => 'pending',
+                'amount' => $amount,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
             DB::table('payment_transactions')->insert([
-                'id' => (string) \Illuminate\Support\Str::uuid(),
+                'id' => (string) Str::uuid(),
                 'tenant_id' => $tenantId,
                 'store_id' => $storeId,
                 'order_id' => $orderId,
                 'channel_id' => $channelId,
                 'status' => 'created',
-                'amount' => $order->total_amount,
+                'amount' => $amount,
+                'fee_amount' => $feeAmount,
                 'created_at' => now(),
                 'updated_at' => now(),
             ]);
 
-            return $channelId;
+            return $paymentId;
         });
     }
 }
