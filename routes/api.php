@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Core\Orders\PosOrderService;
+use App\Core\Restaurant\MenuController;
 use App\Core\Restaurant\TableService;
 use App\Core\Restaurant\KitchenTicketController;
 use Illuminate\Http\Request;
@@ -10,6 +11,7 @@ use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function (): void {
     Route::get('/health', fn () => ['ok' => true, 'service' => 'riscp-platform']);
+    Route::get('/restaurant/menu', [MenuController::class, 'index']);
 
     Route::post('/restaurant/tables/{tableId}/occupy', function (Request $request, string $tableId) {
         app(TableService::class)->occupy((string) $request->input('tenant_id'), $tableId, (string) $request->input('order_id'));
