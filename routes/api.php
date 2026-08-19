@@ -6,12 +6,16 @@ use App\Core\Orders\PosOrderService;
 use App\Core\Restaurant\MenuController;
 use App\Core\Restaurant\TableService;
 use App\Core\Restaurant\KitchenTicketController;
+use App\Core\Payments\PaymentAdminController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function (): void {
     Route::get('/health', fn () => ['ok' => true, 'service' => 'riscp-platform']);
     Route::get('/restaurant/menu', [MenuController::class, 'index']);
+    Route::get('/admin/payments/providers', [PaymentAdminController::class, 'providers']);
+    Route::get('/admin/payments/accounts', [PaymentAdminController::class, 'accounts']);
+    Route::post('/admin/payments/routes', [PaymentAdminController::class, 'route']);
 
     Route::post('/restaurant/tables/{tableId}/occupy', function (Request $request, string $tableId) {
         app(TableService::class)->occupy((string) $request->input('tenant_id'), $tableId, (string) $request->input('order_id'));
