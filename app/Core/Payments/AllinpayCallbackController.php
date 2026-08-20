@@ -22,43 +22,24 @@ final class AllinpayCallbackController
 
             $signer = new AllinpaySigner('', (string) file_get_contents($publicPath));
             $parsed = (new AllinpayCallbackHandler($signer))->handle($payload);
-            $providerCode = 'allinpay';
             $merchantTradeNo = (string) ($parsed['merchant_trade_no'] ?? '');
             $providerTradeNo = (string) ($parsed['provider_trade_no'] ?? '');
-            $eventId = hash('sha256', implode('|', [
-                $providerCode, $merchantTradeNo, $providerTradeNo,
-                (string) ($payload['trxstatus'] ?? ''), (string) ($payload['trxamt'] ?? ''),
-            ]));
+            if ($merchantTradeNo === '') throw new \RuntimeException('Allinpay callback merchant trade number is missing.');
 
-            if (DB::table('payment_callbacks')->where('provider_code', $providerCode)->where('event_id', $eventId)->exists()) {
-                return response()->json(['success' => true, 'idempotent' => true]);
-            }
-
-            $tx = DB::table('payment_transactions')->where('merchant_trade_no', $merchantTradeNo)->first();
+            $tx = DB::table('payment_transactions as t')->join('payment_providers as p', 'p.id', '=', 't.provider_id')->where('t.merchant_trade_no', $merchantTradeNo)->select('t.*', 'p.code as provider_code')->first();
             if (!$tx) throw new \RuntimeException('Payment transaction not found.');
+            if ($tx->provider_code !== 'allinpay') throw new \RuntimeException('Payment transaction provider mismatch.');
 
-            DB::transaction(function () use ($eventId, $providerCode, $merchantTradeNo, $providerTradeNo, $payload, $tx): void {
-                DB::table('payment_callbacks')->insert([
-                    'id' => (string) \Illuminate\Support\Str::uuid(),
-                    'transaction_id' => $tx->id,
-                    'provider_code' => $providerCode,
-                    'event_id' => $eventId,
-                    'event_type' => 'payment.result',
-                    'provider_trade_no' => $providerTradeNo,
-                    'merchant_trade_no' => $merchantTradeNo,
-                    'signature_status' => 'verified',
-                    'payload' => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-                    'received_at' => now(),
-                    'created_at' => now(),
-                    'updated_at' => now(),
-                ]);
-            });
+            $eventId = hash('sha256', implode('|', ['allinpay', $merchantTradeNo, $providerTradeNo, (string) ($payload['trxstatus'] ?? ''), (string) ($payload['trxamt'] ?? '')]));
+            $service = app(PaymentTransactionService::class);
 
             if (($parsed['status'] ?? null) === 'paid') {
-                app(PaymentTransactionService::class)->markPaid($tx->id, $providerTradeNo, $payload);
+                $service->markPaid($tx->id, $providerTradeNo, $payload, $eventId, 'verified');
+            } else {
+                $service->recordCallback($tx->id, $payload, $eventId, 'verified');
             }
 
-            return response()->json(['success' => true, 'idempotent' => false]);
+            return response()->json(['success' => true, 'idempotent' => $tx->status === 'paid' && ($parsed['status'] ?? null) === 'paid']);
         } catch (\Throwable $e) {
             return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
         }
