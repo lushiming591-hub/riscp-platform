@@ -7,7 +7,6 @@ namespace Tests\Unit\Core\Payments\Providers\Allinpay;
 use App\Core\Payments\Providers\Allinpay\AllinpayClient;
 use App\Core\Payments\Providers\Allinpay\AllinpaySigner;
 use PHPUnit\Framework\TestCase;
-use ReflectionClass;
 use RuntimeException;
 
 final class AllinpayClientTest extends TestCase
@@ -24,8 +23,11 @@ final class AllinpayClientTest extends TestCase
             'trxstatus' => '0000',
         ];
         $response['sign'] = $signer->sign($response);
+        $fake = new FakeAllinpayHttpTransport([
+            ['status' => 200, 'body' => http_build_query($response, '', '&', PHP_QUERY_RFC3986)],
+        ]);
+        $client = $this->client($signer, $fake);
 
-        $client = $this->clientWithFakeTransport($signer, $response);
         $result = $client->post('/apiweb/unitorder/pay', [
             'reqsn' => 'ORDER-001',
             'trxamt' => '100',
@@ -33,49 +35,76 @@ final class AllinpayClientTest extends TestCase
 
         self::assertSame('SUCCESS', $result['retcode']);
         self::assertSame('TX-001', $result['trxid']);
+        self::assertCount(1, $fake->requests);
+        self::assertSame('https://fake.test/apiweb/unitorder/pay', $fake->requests[0]['url']);
+        self::assertStringContainsString('appid=00008102', $fake->requests[0]['body']);
+        self::assertStringContainsString('orgid=990701059986000', $fake->requests[0]['body']);
+        self::assertStringContainsString('cusid=990701059986000', $fake->requests[0]['body']);
+        self::assertStringContainsString('reqsn=ORDER-001', $fake->requests[0]['body']);
+        self::assertStringContainsString('trxamt=100', $fake->requests[0]['body']);
+        self::assertStringContainsString('sign=', $fake->requests[0]['body']);
     }
 
     public function testPostRejectsInvalidResponseSignature(): void
     {
         $keys = $this->keys();
         $signer = new AllinpaySigner($keys['private'], $keys['public']);
-        $response = [
-            'retcode' => 'SUCCESS',
-            'reqsn' => 'ORDER-001',
-            'trxid' => 'TX-001',
-            'trxstatus' => '0000',
-            'sign' => 'invalid-signature',
-        ];
-
-        $client = $this->clientWithFakeTransport($signer, $response);
+        $fake = new FakeAllinpayHttpTransport([
+            ['status' => 200, 'body' => http_build_query([
+                'retcode' => 'SUCCESS',
+                'reqsn' => 'ORDER-001',
+                'trxid' => 'TX-001',
+                'trxstatus' => '0000',
+                'sign' => 'invalid-signature',
+            ], '', '&', PHP_QUERY_RFC3986)],
+        ]);
+        $client = $this->client($signer, $fake);
 
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('response signature verification failed');
-        $client->post('/apiweb/unitorder/pay', [
-            'reqsn' => 'ORDER-001',
-            'trxamt' => '100',
-        ]);
+        $client->post('/apiweb/unitorder/pay', ['reqsn' => 'ORDER-001', 'trxamt' => '100']);
     }
 
-    private function clientWithFakeTransport(AllinpaySigner $signer, array $response): AllinpayClient
+    public function testPostRejectsHttpError(): void
     {
-        // Transport injection is intentionally isolated here. The production client
-        // remains responsible for the actual cURL transport; this test verifies the
-        // signing/response contract without calling Allinpay.
-        $client = new AllinpayClient(
-            'https://syb-test.allinpay.com',
+        $keys = $this->keys();
+        $signer = new AllinpaySigner($keys['private'], $keys['public']);
+        $fake = new FakeAllinpayHttpTransport([
+            ['status' => 500, 'body' => 'server error'],
+        ]);
+        $client = $this->client($signer, $fake);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Allinpay HTTP error: 500');
+        $client->post('/apiweb/unitorder/pay', ['reqsn' => 'ORDER-001', 'trxamt' => '100']);
+    }
+
+    public function testPostRejectsEmptyResponse(): void
+    {
+        $keys = $this->keys();
+        $signer = new AllinpaySigner($keys['private'], $keys['public']);
+        $fake = new FakeAllinpayHttpTransport([
+            ['status' => 200, 'body' => ''],
+        ]);
+        $client = $this->client($signer, $fake);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('empty response');
+        $client->post('/apiweb/unitorder/pay', ['reqsn' => 'ORDER-001', 'trxamt' => '100']);
+    }
+
+    private function client(AllinpaySigner $signer, FakeAllinpayHttpTransport $transport): AllinpayClient
+    {
+        return new AllinpayClient(
+            'https://fake.test',
             '00008102',
             $signer,
             'RSA',
             '990701059986000',
             '990701059986000',
             15,
+            $transport,
         );
-
-        // Keep this test executable without real network traffic once the transport
-        // seam is introduced. Until then, the helper is deliberately explicit.
-        $this->markTestIncomplete('Awaiting AllinpayClient transport seam for HTTP fake injection.');
-        return $client;
     }
 
     private function keys(): array
@@ -85,11 +114,9 @@ final class AllinpayClientTest extends TestCase
             'private_key_bits' => 1024,
         ]);
         self::assertNotFalse($key);
-
         openssl_pkey_export($key, $private);
         $details = openssl_pkey_get_details($key);
         self::assertIsArray($details);
-
         return ['private' => $private, 'public' => $details['key']];
     }
 }
