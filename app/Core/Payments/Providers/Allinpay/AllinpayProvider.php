@@ -23,53 +23,27 @@ final class AllinpayProvider implements PaymentProviderContract
     private const CLOSE_NATIVE = '/apiweb/unitorder/closenative';
     private const REFUND = '/apiweb/tranx/refund';
 
-    public function __construct(
-        private readonly AllinpaySigner $signer,
-        private readonly string $baseUrl,
-        private readonly string $orgId,
-        private readonly string $cusId,
-        private readonly string $appId,
-        private readonly string $version = '11',
-    ) {}
+    public function __construct(private readonly AllinpaySigner $signer, private readonly string $baseUrl, private readonly string $orgId, private readonly string $cusId, private readonly string $appId, private readonly string $version = '11') {}
 
-    public function pay(array $request): array
-    {
-        return $this->payment(self::PAY, $request);
-    }
-
-    public function scanPay(array $request): array
-    {
-        return $this->payment(self::NATIVE_PAY, $request);
-    }
-
-    public function microPay(array $request): array
-    {
-        return $this->payment(self::MICRO_PAY, $request);
-    }
-
-    public function query(array $request): array
-    {
-        return $this->queryEndpoint(self::QUERY, $request);
-    }
-
-    public function confirmQuery(array $request): array
-    {
-        return $this->queryEndpoint(self::QUERY_CONFIRM, $request);
-    }
+    public function pay(array $request): array { return $this->payment(self::PAY, $request); }
+    public function scanPay(array $request): array { return $this->payment(self::NATIVE_PAY, $request); }
+    public function microPay(array $request): array { return $this->payment(self::MICRO_PAY, $request); }
+    public function query(array $request): array { return $this->queryEndpoint(self::QUERY, $request); }
+    public function confirmQuery(array $request): array { return $this->queryEndpoint(self::QUERY_CONFIRM, $request); }
 
     public function closeNative(array $request): array
     {
-        return $this->request(self::CLOSE_NATIVE, $this->basePayload($request));
+        return $this->request(self::CLOSE_NATIVE, $this->basePayload($this->providerPayload($request)));
     }
 
     public function refund(array $request): array
     {
+        $request = $this->providerPayload($request);
         $payload = $this->basePayload($request);
         $payload['reqsn'] ??= $request['refund_trade_no'] ?? ('RF' . Str::upper(Str::random(24)));
         $payload['trxamt'] ??= $request['amount_fen'] ?? $request['trxamt'] ?? null;
         $payload['oldtrxid'] ??= $request['provider_trade_no'] ?? $request['oldtrxid'] ?? null;
         $payload['oldreqsn'] ??= $request['merchant_trade_no'] ?? $request['oldreqsn'] ?? null;
-
         return $this->normalizeRefund($this->request(self::REFUND, $payload));
     }
 
@@ -80,18 +54,16 @@ final class AllinpayProvider implements PaymentProviderContract
 
     public function parseCallback(array $payload, array $headers = []): array
     {
-        if (!$this->verifyCallback($payload, $headers)) {
-            throw new RuntimeException('Invalid Allinpay callback signature.');
-        }
-
+        if (!$this->verifyCallback($payload, $headers)) throw new RuntimeException('Invalid Allinpay callback signature.');
+        $trxStatus = (string) ($payload['trxstatus'] ?? '');
         return [
             'merchant_trade_no' => $payload['reqsn'] ?? $payload['unireqsn'] ?? null,
             'provider_trade_no' => $payload['trxid'] ?? null,
             'channel_trade_no' => $payload['chnltrxid'] ?? null,
             'ret_code' => $payload['retcode'] ?? null,
             'ret_msg' => $payload['retmsg'] ?? $payload['errmsg'] ?? null,
-            'trx_status' => $payload['trxstatus'] ?? null,
-            'status' => $this->status((string) ($payload['trxstatus'] ?? '')),
+            'trx_status' => $trxStatus ?: null,
+            'status' => $this->status($trxStatus),
             'raw' => $payload,
         ];
     }
@@ -103,15 +75,12 @@ final class AllinpayProvider implements PaymentProviderContract
 
     private function payment(string $endpoint, array $request): array
     {
+        $request = $this->providerPayload($request);
         $payload = $this->basePayload($request);
         $payload['reqsn'] ??= $request['merchant_trade_no'] ?? null;
         $payload['trxamt'] ??= $request['amount_fen'] ?? $request['trxamt'] ?? null;
-        $payload['paytype'] ??= $request['paytype'] ?? null;
-        $payload['notifyurl'] ??= $request['notifyurl'] ?? null;
-
         $response = $this->request($endpoint, $payload);
         $trxStatus = (string) ($response['trxstatus'] ?? '');
-
         return (new PaymentResponse(
             status: $this->status($trxStatus),
             merchantTradeNo: $response['reqsn'] ?? $response['unireqsn'] ?? $payload['reqsn'] ?? null,
@@ -127,13 +96,12 @@ final class AllinpayProvider implements PaymentProviderContract
 
     private function queryEndpoint(string $endpoint, array $request): array
     {
+        $request = $this->providerPayload($request);
         $payload = $this->basePayload($request);
         $payload['reqsn'] ??= $request['merchant_trade_no'] ?? null;
         $payload['trxid'] ??= $request['provider_trade_no'] ?? null;
-
         $response = $this->request($endpoint, $payload);
         $trxStatus = (string) ($response['trxstatus'] ?? '');
-
         return (new QueryResponse(
             status: $this->status($trxStatus),
             merchantTradeNo: $response['reqsn'] ?? $response['unireqsn'] ?? $payload['reqsn'] ?? null,
@@ -165,41 +133,31 @@ final class AllinpayProvider implements PaymentProviderContract
         $payload['randomstr'] ??= Str::lower(Str::random(32));
         $payload['signtype'] ??= 'RSA';
         $payload['sign'] = $this->signer->sign($payload);
-
         $response = $this->http()->asForm()->post($endpoint, $payload);
-        if ($response->failed()) {
-            throw new RuntimeException('Allinpay HTTP request failed: ' . $response->status());
-        }
-
+        if ($response->failed()) throw new RuntimeException('Allinpay HTTP request failed: ' . $response->status());
         $data = $response->json();
-        if (!is_array($data)) {
-            throw new RuntimeException('Allinpay returned an invalid JSON response.');
-        }
-
+        if (!is_array($data)) throw new RuntimeException('Allinpay returned an invalid JSON response.');
         $signature = (string) ($data['sign'] ?? '');
-        if ($signature !== '' && !$this->signer->verify($data, $signature)) {
-            throw new RuntimeException('Invalid Allinpay response signature.');
-        }
-
+        if ($signature !== '' && !$this->signer->verify($data, $signature)) throw new RuntimeException('Invalid Allinpay response signature.');
         return $data;
     }
 
     private function basePayload(array $request): array
     {
-        return array_merge([
-            'orgid' => $this->orgId,
-            'cusid' => $this->cusId,
-            'appid' => $this->appId,
-            'version' => $this->version,
-        ], $request);
+        return array_merge(['orgid' => $this->orgId, 'cusid' => $this->cusId, 'appid' => $this->appId, 'version' => $this->version], $request);
+    }
+
+    private function providerPayload(array $request): array
+    {
+        foreach (['tenant_id','tenantId','store_id','storeId','order_id','orderId','payment_method','paymentMethod','metadata'] as $key) unset($request[$key]);
+        if (isset($request['merchant_trade_no']) && !isset($request['reqsn'])) $request['reqsn'] = $request['merchant_trade_no'];
+        if (isset($request['amount']) && !isset($request['trxamt'])) $request['trxamt'] = (int) round(((float) $request['amount']) * 100);
+        return $request;
     }
 
     private function http(): PendingRequest
     {
-        return Http::baseUrl(rtrim($this->baseUrl, '/'))
-            ->acceptJson()
-            ->timeout(15)
-            ->connectTimeout(5);
+        return Http::baseUrl(rtrim($this->baseUrl, '/'))->acceptJson()->timeout(15)->connectTimeout(5);
     }
 
     private function status(string $trxStatus): string
