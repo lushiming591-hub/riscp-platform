@@ -32,10 +32,11 @@ final class PaymentTransactionService
         return DB::table('payment_callbacks')->insertOrIgnore(['id' => (string) Str::uuid(), 'provider_id' => $tx->provider_id, 'payment_transaction_id' => $transactionId, 'event_id' => $eventId, 'event_type' => 'payment.result', 'signature_status' => $signatureStatus, 'payload' => json_encode($raw, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), 'received_at' => now(), 'created_at' => now(), 'updated_at' => now()]) > 0;
     }
 
-    public function markPaid(string $transactionId, string $providerTradeNo, array $raw = [], ?string $eventId = null, string $signatureStatus = 'verified'): void
+    public function markPaid(string $transactionId, string $providerTradeNo, array $raw = [], ?string $eventId = null, string $signatureStatus = 'verified'): bool
     {
         $event = null;
-        DB::transaction(function () use ($transactionId, $providerTradeNo, $raw, $eventId, $signatureStatus, &$event): void {
+        $changed = false;
+        DB::transaction(function () use ($transactionId, $providerTradeNo, $raw, $eventId, $signatureStatus, &$event, &$changed): void {
             $tx = DB::table('payment_transactions as t')->leftJoin('payment_providers as p', 'p.id', '=', 't.provider_id')->where('t.id', $transactionId)->lockForUpdate()->select('t.*', 'p.code as provider_code')->first();
             if (!$tx) throw new \RuntimeException('Payment transaction not found.');
             if ($tx->status === 'paid') return;
@@ -44,7 +45,9 @@ final class PaymentTransactionService
             DB::table('orders')->where('id', $tx->order_id)->where('status', 'pending')->update(['status' => 'paid', 'updated_at' => now()]);
             if ($eventId === null) DB::table('payment_callbacks')->insert(['id' => (string) Str::uuid(), 'provider_id' => $tx->provider_id, 'payment_transaction_id' => $transactionId, 'event_id' => hash('sha256', 'internal|' . $transactionId . '|' . $providerTradeNo), 'event_type' => 'payment.succeeded', 'signature_status' => 'internal', 'payload' => json_encode($raw, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), 'received_at' => now(), 'created_at' => now(), 'updated_at' => now()]);
             $event = new PaymentCompletedEvent(merchantTradeNo: (string) $tx->merchant_trade_no, providerTradeNo: $providerTradeNo, amountCents: (int) round(((float) $tx->amount) * 100), providerCode: (string) ($tx->provider_code ?? 'unknown'), metadata: ['transaction_id' => $transactionId, 'order_id' => (string) $tx->order_id]);
+            $changed = true;
         });
         if ($event) event($event);
+        return $changed;
     }
 }
