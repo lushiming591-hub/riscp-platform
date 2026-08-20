@@ -14,7 +14,7 @@ final class MockPaymentProvider implements PaymentProviderInterface
 
     public function createPayment(PaymentRequest $request): PaymentResponse
     {
-        return new PaymentResponse(true, 'MOCK-' . $request->merchantTradeNo, 'mock://pay/' . $request->merchantTradeNo);
+        return new PaymentResponse('paid', $request->merchantTradeNo, 'MOCK-' . $request->merchantTradeNo, null, 'mock://pay/' . $request->merchantTradeNo);
     }
 
     public function queryPayment(string $providerTradeNo): array
