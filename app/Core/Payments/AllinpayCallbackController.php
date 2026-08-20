@@ -8,7 +8,6 @@ use App\Core\Payments\Providers\Allinpay\AllinpayCallbackHandler;
 use App\Core\Payments\Providers\Allinpay\AllinpaySigner;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 
 final class AllinpayCallbackController
 {
@@ -16,53 +15,48 @@ final class AllinpayCallbackController
     {
         try {
             $payload = $request->all();
-            $privatePath = (string) config('allinpay.private_key_path');
             $publicPath = (string) config('allinpay.public_key_path');
             if ($publicPath === '' || !is_readable($publicPath)) {
                 throw new \RuntimeException('Allinpay public key is not configured.');
             }
+
             $signer = new AllinpaySigner('', (string) file_get_contents($publicPath));
             $parsed = (new AllinpayCallbackHandler($signer))->handle($payload);
-
             $providerCode = 'allinpay';
+            $merchantTradeNo = (string) ($parsed['merchant_trade_no'] ?? '');
+            $providerTradeNo = (string) ($parsed['provider_trade_no'] ?? '');
             $eventId = hash('sha256', implode('|', [
-                $providerCode,
-                (string) ($parsed['merchant_trade_no'] ?? ''),
-                (string) ($parsed['provider_trade_no'] ?? ''),
-                (string) ($payload['trxstatus'] ?? ''),
-                (string) ($payload['trxamt'] ?? ''),
+                $providerCode, $merchantTradeNo, $providerTradeNo,
+                (string) ($payload['trxstatus'] ?? ''), (string) ($payload['trxamt'] ?? ''),
             ]));
 
-            $existing = DB::table('payment_callbacks')->where('provider_code', $providerCode)->where('event_id', $eventId)->first();
-            if ($existing) return response()->json(['success' => true, 'idempotent' => true]);
+            if (DB::table('payment_callbacks')->where('provider_code', $providerCode)->where('event_id', $eventId)->exists()) {
+                return response()->json(['success' => true, 'idempotent' => true]);
+            }
 
-            DB::transaction(function () use ($parsed, $payload, $providerCode, $eventId): void {
-                $tx = DB::table('payment_transactions')->where('merchant_trade_no', $parsed['merchant_trade_no'] ?? '')->lockForUpdate()->first();
+            $tx = DB::table('payment_transactions')->where('merchant_trade_no', $merchantTradeNo)->first();
+            if (!$tx) throw new \RuntimeException('Payment transaction not found.');
+
+            DB::transaction(function () use ($eventId, $providerCode, $merchantTradeNo, $providerTradeNo, $payload, $tx): void {
                 DB::table('payment_callbacks')->insert([
-                    'id' => (string) Str::uuid(),
-                    'transaction_id' => $tx->id ?? null,
+                    'id' => (string) \Illuminate\Support\Str::uuid(),
+                    'transaction_id' => $tx->id,
                     'provider_code' => $providerCode,
                     'event_id' => $eventId,
                     'event_type' => 'payment.result',
-                    'provider_trade_no' => $parsed['provider_trade_no'] ?? null,
-                    'merchant_trade_no' => $parsed['merchant_trade_no'] ?? null,
+                    'provider_trade_no' => $providerTradeNo,
+                    'merchant_trade_no' => $merchantTradeNo,
                     'signature_status' => 'verified',
                     'payload' => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
                     'received_at' => now(),
                     'created_at' => now(),
                     'updated_at' => now(),
                 ]);
-
-                if ($tx && $parsed['status'] === 'paid') {
-                    DB::table('payment_transactions')->where('id', $tx->id)->update([
-                        'status' => 'paid',
-                        'provider_trade_no' => $parsed['provider_trade_no'],
-                        'paid_at' => now(),
-                        'updated_at' => now(),
-                    ]);
-                    DB::table('orders')->where('id', $tx->order_id)->where('status', 'pending')->update(['status' => 'paid', 'updated_at' => now()]);
-                }
             });
+
+            if (($parsed['status'] ?? null) === 'paid') {
+                app(PaymentTransactionService::class)->markPaid($tx->id, $providerTradeNo, $payload);
+            }
 
             return response()->json(['success' => true, 'idempotent' => false]);
         } catch (\Throwable $e) {
