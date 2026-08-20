@@ -34,12 +34,17 @@ final class AllinpayCallbackController
             $service = app(PaymentTransactionService::class);
 
             if (($parsed['status'] ?? null) === 'paid') {
-                $service->markPaid($tx->id, $providerTradeNo, $payload, $eventId, 'verified');
+                $changed = $service->markPaid($tx->id, $providerTradeNo, $payload, $eventId, 'verified');
             } else {
-                $service->recordCallback($tx->id, $payload, $eventId, 'verified');
+                $accepted = $service->recordCallback($tx->id, $payload, $eventId, 'verified');
+                $changed = false;
+                if (!$accepted && $tx->status === 'paid') {
+                    // A duplicate terminal callback is already reflected by the
+                    // transaction state and is therefore safely acknowledged.
+                }
             }
 
-            return response()->json(['success' => true, 'idempotent' => $tx->status === 'paid' && ($parsed['status'] ?? null) === 'paid']);
+            return response()->json(['success' => true, 'idempotent' => !$changed]);
         } catch (\Throwable $e) {
             return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
         }
