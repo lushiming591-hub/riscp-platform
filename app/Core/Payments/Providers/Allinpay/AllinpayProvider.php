@@ -77,8 +77,6 @@ final class AllinpayProvider implements PaymentProviderContract
     {
         $request = $this->providerPayload($request);
         $payload = $this->basePayload($request);
-        $payload['reqsn'] ??= $request['merchant_trade_no'] ?? null;
-        $payload['trxamt'] ??= $request['amount_fen'] ?? $request['trxamt'] ?? null;
         $response = $this->request($endpoint, $payload);
         $trxStatus = (string) ($response['trxstatus'] ?? '');
         return (new PaymentResponse(
@@ -98,8 +96,6 @@ final class AllinpayProvider implements PaymentProviderContract
     {
         $request = $this->providerPayload($request);
         $payload = $this->basePayload($request);
-        $payload['reqsn'] ??= $request['merchant_trade_no'] ?? null;
-        $payload['trxid'] ??= $request['provider_trade_no'] ?? null;
         $response = $this->request($endpoint, $payload);
         $trxStatus = (string) ($response['trxstatus'] ?? '');
         return (new QueryResponse(
@@ -149,9 +145,12 @@ final class AllinpayProvider implements PaymentProviderContract
 
     private function providerPayload(array $request): array
     {
-        foreach (['tenant_id','tenantId','store_id','storeId','order_id','orderId','payment_method','paymentMethod','metadata'] as $key) unset($request[$key]);
-        if (isset($request['merchant_trade_no']) && !isset($request['reqsn'])) $request['reqsn'] = $request['merchant_trade_no'];
-        if (isset($request['amount']) && !isset($request['trxamt'])) $request['trxamt'] = (int) round(((float) $request['amount']) * 100);
+        $amountFen = $request['amount_fen'] ?? null;
+        if ($amountFen === null && isset($request['amount'])) $amountFen = (int) round(((float) $request['amount']) * 100);
+        if ($amountFen !== null) $request['trxamt'] = $request['trxamt'] ?? $amountFen;
+        if (isset($request['merchant_trade_no'])) $request['reqsn'] = $request['reqsn'] ?? $request['merchant_trade_no'];
+        if (isset($request['provider_trade_no'])) $request['trxid'] = $request['trxid'] ?? $request['provider_trade_no'];
+        foreach (['tenant_id','tenantId','store_id','storeId','order_id','orderId','amount','amount_fen','merchant_trade_no','provider_trade_no','payment_method','paymentMethod','metadata','refund_trade_no'] as $key) unset($request[$key]);
         return $request;
     }
 
