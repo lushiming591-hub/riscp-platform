@@ -14,6 +14,7 @@ final class AllinpayClient
         private readonly string $orgId = '',
         private readonly string $cusId = '',
         private readonly int $timeout = 15,
+        private readonly ?AllinpayHttpTransport $transport = null,
     ) {}
 
     public static function fromConfig(): self
@@ -56,33 +57,23 @@ final class AllinpayClient
         $params['randomstr'] = $params['randomstr'] ?? bin2hex(random_bytes(16));
         $params['sign'] = $this->signer->sign($params);
 
-        $ch = curl_init(rtrim($this->baseUrl, '/') . $path);
-        curl_setopt_array($ch, [
-            CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => http_build_query($params, '', '&', PHP_QUERY_RFC3986),
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_CONNECTTIMEOUT => min(5, $this->timeout),
-            CURLOPT_TIMEOUT => $this->timeout,
-            CURLOPT_HTTPHEADER => ['Content-Type: application/x-www-form-urlencoded; charset=UTF-8'],
-        ]);
+        $body = http_build_query($params, '', '&', PHP_QUERY_RFC3986);
+        $transport = $this->transport ?? new CurlAllinpayHttpTransport();
+        $response = $transport->post(
+            rtrim($this->baseUrl, '/') . $path,
+            $body,
+            ['Content-Type: application/x-www-form-urlencoded; charset=UTF-8'],
+            min(5, $this->timeout),
+            $this->timeout,
+        );
 
-        $body = curl_exec($ch);
-        if ($body === false) {
-            $error = curl_error($ch);
-            curl_close($ch);
-            throw new \RuntimeException('Allinpay request failed: ' . $error);
+        if ($response['status'] < 200 || $response['status'] >= 300) {
+            throw new \RuntimeException('Allinpay HTTP error: ' . $response['status']);
         }
 
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        if ($httpCode < 200 || $httpCode >= 300) {
-            throw new \RuntimeException('Allinpay HTTP error: ' . $httpCode);
-        }
-
-        parse_str($body, $result);
+        parse_str($response['body'], $result);
         if (!$result) {
-            $result = json_decode($body, true) ?: [];
+            $result = json_decode($response['body'], true) ?: [];
         }
         if (!$result) {
             throw new \RuntimeException('Allinpay returned an empty response.');
