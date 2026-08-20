@@ -30,7 +30,8 @@ final class PaymentCallbackIdempotencyTest extends TestCase
 
         $this->assertTrue($changed);
         $this->assertSame('paid', DB::table('payment_transactions')->where('id', $transactionId)->value('status'));
-        $this->assertSame('paid', DB::table('orders')->where('id', DB::table('payment_transactions')->where('id', $transactionId)->value('order_id'))->value('status'));
+        $orderId = DB::table('payment_transactions')->where('id', $transactionId)->value('order_id');
+        $this->assertSame('paid', DB::table('orders')->where('id', $orderId)->value('status'));
         $this->assertSame(1, DB::table('payment_callbacks')->where('provider_id', $providerId)->where('event_id', 'evt-001')->count());
         Event::assertDispatched(PaymentCompletedEvent::class, 1);
     }
@@ -76,10 +77,41 @@ final class PaymentCallbackIdempotencyTest extends TestCase
         Event::assertNotDispatched(PaymentCompletedEvent::class);
     }
 
-    public function test_callback_requires_provider_identity_and_event_id(): void
+    public function test_internal_completion_event_gets_a_deterministic_callback_id_when_event_id_is_absent(): void
+    {
+        Event::fake();
+        [$providerId, $transactionId] = $this->createPaymentFixture();
+
+        $this->assertTrue(app(PaymentTransactionService::class)->markPaid(
+            $transactionId,
+            'ALI-TRADE-006',
+            ['status' => 'success'],
+            null,
+        ));
+
+        $this->assertSame(1, DB::table('payment_callbacks')->where('provider_id', $providerId)->where('payment_transaction_id', $transactionId)->count());
+        $callback = DB::table('payment_callbacks')->where('payment_transaction_id', $transactionId)->first();
+        $this->assertNotNull($callback);
+        $this->assertNotSame('', (string) $callback->event_id);
+        $this->assertSame('internal', $callback->signature_status);
+        Event::assertDispatched(PaymentCompletedEvent::class, 1);
+    }
+
+    public function test_callback_schema_requires_provider_id_and_event_id(): void
+    {
+        $columns = collect(DB::select('PRAGMA table_info(payment_callbacks)'))
+            ->keyBy('name');
+
+        $this->assertArrayHasKey('provider_id', $columns->all());
+        $this->assertArrayHasKey('event_id', $columns->all());
+        $this->assertSame(1, (int) $columns['provider_id']->notnull);
+        $this->assertSame(1, (int) $columns['event_id']->notnull);
+    }
+
+    public function test_empty_callback_event_id_is_rejected(): void
     {
         $service = app(PaymentTransactionService::class);
-        [$providerId, $transactionId] = $this->createPaymentFixture();
+        [, $transactionId] = $this->createPaymentFixture();
 
         $this->expectException(\InvalidArgumentException::class);
         $service->markPaid($transactionId, 'ALI-TRADE-005', [], '');
