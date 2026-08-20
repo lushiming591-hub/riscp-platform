@@ -6,7 +6,12 @@ namespace App\Core\Payments\Providers\Allinpay;
 
 final class AllinpayClient
 {
-    public function __construct(private readonly string $baseUrl, private readonly string $appId, private readonly string $signType = 'RSA') {}
+    public function __construct(
+        private readonly string $baseUrl,
+        private readonly string $appId,
+        private readonly AllinpaySigner $signer,
+        private readonly string $signType = 'RSA',
+    ) {}
 
     public function post(string $path, array $params): array
     {
@@ -14,6 +19,7 @@ final class AllinpayClient
         $params['version'] = $params['version'] ?? '11';
         $params['signtype'] = $params['signtype'] ?? $this->signType;
         $params['randomstr'] = $params['randomstr'] ?? bin2hex(random_bytes(16));
+        $params['sign'] = $this->signer->sign($params);
 
         $ch = curl_init(rtrim($this->baseUrl, '/') . $path);
         curl_setopt_array($ch, [
@@ -32,6 +38,15 @@ final class AllinpayClient
 
         parse_str($body, $result);
         if (!$result) $result = json_decode($body, true) ?: [];
+        if (!$result) throw new \RuntimeException('Allinpay returned an empty response.');
+
+        if (!empty($result['sign'])) {
+            $verifyParams = $result;
+            unset($verifyParams['sign']);
+            if (!$this->signer->verify($verifyParams, (string) $result['sign'])) {
+                throw new \RuntimeException('Allinpay response signature verification failed.');
+            }
+        }
         return $result;
     }
 }
