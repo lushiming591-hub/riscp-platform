@@ -13,7 +13,7 @@ return new class extends Migration {
             Schema::create('payment_callbacks', function (Blueprint $table): void {
                 $table->uuid('id')->primary();
                 $table->uuid('payment_transaction_id')->nullable()->index();
-                $table->uuid('provider_id')->nullable()->index();
+                $table->uuid('provider_id');
                 $table->string('event_id', 191);
                 $table->string('event_type', 64);
                 $table->string('provider_trade_no', 128)->nullable()->index();
@@ -51,9 +51,11 @@ return new class extends Migration {
             }
         });
 
-        // The new provider_id/event_id key is the canonical idempotency key.
-        // Existing provider_code/transaction_id columns are intentionally left in
-        // place for backward compatibility with already deployed databases.
+        // Existing deployments may contain legacy rows. They must be backfilled
+        // before provider_id/event_id can safely become NOT NULL. The application
+        // writes provider_id/event_id for all new callbacks, while the migration
+        // keeps the legacy columns for backward compatibility.
+        // The canonical uniqueness constraint is added only when both columns exist.
         try {
             Schema::table('payment_callbacks', function (Blueprint $table): void {
                 $table->unique(['provider_id', 'event_id'], 'payment_callbacks_provider_id_event_unique');
