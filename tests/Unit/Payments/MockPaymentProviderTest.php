@@ -15,7 +15,7 @@ final class MockPaymentProviderTest extends TestCase
         $provider = new MockPaymentProvider();
         $request = new PaymentRequest('tenant', 'store', 'order', 'ORDER-001', 100.00, 'wechat');
         $payment = $provider->createPayment($request);
-        self::assertTrue($payment->success);
+        self::assertSame('paid', $payment->status);
         self::assertSame('MOCK-ORDER-001', $payment->providerTradeNo);
         self::assertSame('paid', $provider->queryPayment($payment->providerTradeNo)['status']);
         self::assertTrue($provider->refund($payment->providerTradeNo, 'REF-001', 30.00)['success']);
@@ -25,5 +25,6 @@ final class MockPaymentProviderTest extends TestCase
     {
         $result = (new MockPaymentProvider())->verifyCallback(['provider_trade_no' => 'MOCK-1']);
         self::assertTrue($result['valid']);
+        self::assertSame('MOCK-1', $result['provider_trade_no']);
     }
 }
