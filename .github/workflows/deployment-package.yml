@@ -31,16 +31,18 @@ jobs:
         run: composer install --no-interaction --prefer-dist --no-progress
 
       - name: Prepare test runtime
-        run: mkdir -p bootstrap/cache storage/framework/{cache,sessions,views} storage/logs && chmod -R ug+rwX bootstrap/cache storage
+        run: |
+          mkdir -p bootstrap/cache storage/framework/cache storage/framework/sessions storage/framework/views storage/logs
+          chmod -R ug+rwX bootstrap/cache storage
 
-      - name: Run tests
-        run: php artisan test
+      - name: Run PHPUnit
+        run: vendor/bin/phpunit --testdox
 
       - name: Prepare deployment package
         run: |
           rm -rf .git .github node_modules vendor storage/logs storage/framework/cache/* storage/framework/sessions/* storage/framework/views/*
           rm -f .env .env.*.local
-          mkdir -p storage/framework/{cache,sessions,views} storage/logs
+          mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs
           touch storage/logs/.gitkeep
           cat > DEPLOY.md <<'EOF'
           # RISCP Platform Deployment
@@ -59,15 +61,15 @@ jobs:
           5. Run `php artisan migrate --force`.
           6. Run `php artisan config:cache`.
           7. Run `php artisan route:cache`.
-          8. Start the queue worker and scheduler according to the production environment.
+          8. Start queue workers and scheduler.
 
-          ## Payment production checks
-          - Verify Allinpay credentials and certificate configuration.
-          - Verify callback URL is publicly reachable over HTTPS.
-          - Verify callback signature validation before enabling live traffic.
-          - Run one small real payment and verify PAID state and callback idempotency.
-          - Run one refund and verify refund callback and final refund state.
-          - Import one reconciliation file and verify matching/difference handling.
+          ## Final verification
+          - Verify Allinpay credentials and certificates.
+          - Verify HTTPS callback URL.
+          - Run one small real payment.
+          - Verify callback and idempotency.
+          - Run one refund and verify refund callback.
+          - Import one reconciliation file and verify matching.
           EOF
           cd ..
           tar --exclude='riscp-platform/.git' -czf "${PACKAGE_NAME}.tar.gz" riscp-platform
