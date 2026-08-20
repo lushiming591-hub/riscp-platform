@@ -9,20 +9,34 @@ use Illuminate\Support\Facades\DB;
 
 final class DatabaseInventoryLedger implements InventoryLedger
 {
-    public function deductForOrder(int|string $orderId, array $requirements): void
+    public function deductForOrder(int|string $orderId, array $requirements, int|string|null $warehouseId = null): void
     {
         foreach ($requirements as $requirement) {
             $materialId = $requirement['material_id'];
             $quantity = (float) $requirement['quantity'];
-            if ($quantity <= 0) throw new \InvalidArgumentException('Inventory deduction quantity must be positive.');
+            if ($quantity <= 0) {
+                throw new \InvalidArgumentException('Inventory deduction quantity must be positive.');
+            }
 
-            $stock = DB::table('inventory_stocks')
-                ->where('material_id', $materialId)
-                ->orderBy('warehouse_id')
-                ->lockForUpdate()
-                ->first();
+            $stockQuery = DB::table('inventory_stocks')
+                ->where('material_id', $materialId);
 
-            if (!$stock) throw new \RuntimeException('Inventory stock not found for material: ' . $materialId);
+            if ($warehouseId !== null) {
+                $stockQuery->where('warehouse_id', $warehouseId);
+            } else {
+                $stockQuery->orderBy('warehouse_id');
+            }
+
+            $stock = $stockQuery->lockForUpdate()->first();
+            if (!$stock) {
+                throw new \RuntimeException('Inventory stock not found for material: ' . $materialId);
+            }
+
+            $key = 'order:' . $orderId . ':material:' . $materialId;
+            if (DB::table('inventory_ledger')->where('idempotency_key', $key)->exists()) {
+                continue;
+            }
+
             $available = (float) $stock->quantity - (float) $stock->reserved_quantity;
             if ($available < $quantity) {
                 throw new \RuntimeException('Insufficient inventory for material: ' . $materialId);
@@ -30,9 +44,6 @@ final class DatabaseInventoryLedger implements InventoryLedger
 
             $before = (float) $stock->quantity;
             $after = $before - $quantity;
-            $key = 'order:' . $orderId . ':material:' . $materialId;
-
-            if (DB::table('inventory_ledger')->where('idempotency_key', $key)->exists()) continue;
 
             DB::table('inventory_stocks')->where('id', $stock->id)->update([
                 'quantity' => $after,
