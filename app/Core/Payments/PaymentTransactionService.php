@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Core\Payments;
 
+use App\Core\Payments\Events\PaymentCompletedEvent;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -36,12 +37,35 @@ final class PaymentTransactionService
 
     public function markPaid(string $transactionId, string $providerTradeNo, array $raw = []): void
     {
-        DB::transaction(function () use ($transactionId, $providerTradeNo, $raw): void {
-            $tx = DB::table('payment_transactions')->where('id', $transactionId)->lockForUpdate()->first();
-            if (!$tx || $tx->status === 'paid') return;
-            DB::table('payment_transactions')->where('id', $transactionId)->update(['status' => 'paid', 'provider_trade_no' => $providerTradeNo, 'paid_at' => now(), 'updated_at' => now()]);
+        $event = null;
+        DB::transaction(function () use ($transactionId, $providerTradeNo, $raw, &$event): void {
+            $tx = DB::table('payment_transactions as t')
+                ->leftJoin('payment_providers as p', 'p.id', '=', 't.provider_id')
+                ->where('t.id', $transactionId)
+                ->lockForUpdate()
+                ->select('t.*', 'p.code as provider_code')
+                ->first();
+            if (!$tx) throw new \RuntimeException('Payment transaction not found.');
+            if ($tx->status === 'paid') return;
+
+            DB::table('payment_transactions')->where('id', $transactionId)->update([
+                'status' => 'paid', 'provider_trade_no' => $providerTradeNo, 'paid_at' => now(), 'updated_at' => now(),
+            ]);
             DB::table('orders')->where('id', $tx->order_id)->where('status', 'pending')->update(['status' => 'paid', 'updated_at' => now()]);
-            DB::table('payment_callbacks')->insert(['id' => (string) Str::uuid(), 'transaction_id' => $transactionId, 'event_type' => 'payment.succeeded', 'payload' => json_encode($raw, JSON_UNESCAPED_UNICODE), 'created_at' => now()]);
+            DB::table('payment_callbacks')->insert([
+                'id' => (string) Str::uuid(), 'transaction_id' => $transactionId, 'event_type' => 'payment.succeeded',
+                'payload' => json_encode($raw, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), 'created_at' => now(), 'updated_at' => now(),
+            ]);
+
+            $event = new PaymentCompletedEvent(
+                merchantTradeNo: (string) $tx->merchant_trade_no,
+                providerTradeNo: $providerTradeNo,
+                amountCents: (int) round(((float) $tx->amount) * 100),
+                providerCode: (string) ($tx->provider_code ?? 'unknown'),
+                metadata: ['transaction_id' => $transactionId, 'order_id' => (string) $tx->order_id],
+            );
         });
+
+        if ($event) event($event);
     }
 }
