@@ -11,10 +11,36 @@ final class AllinpayClient
         private readonly string $appId,
         private readonly AllinpaySigner $signer,
         private readonly string $signType = 'RSA',
+        private readonly string $orgId = '',
+        private readonly string $cusId = '',
+        private readonly int $timeout = 15,
     ) {}
+
+    public static function fromConfig(): self
+    {
+        $privatePath = (string) config('allinpay.private_key_path');
+        $publicPath = (string) config('allinpay.public_key_path');
+        if ($privatePath === '' || !is_readable($privatePath)) {
+            throw new \RuntimeException('Allinpay private key is not configured or readable.');
+        }
+        if ($publicPath === '' || !is_readable($publicPath)) {
+            throw new \RuntimeException('Allinpay public key is not configured or readable.');
+        }
+        return new self(
+            (string) config('allinpay.base_url'),
+            (string) config('allinpay.appid'),
+            new AllinpaySigner((string) file_get_contents($privatePath), (string) file_get_contents($publicPath)),
+            (string) config('allinpay.sign_type', 'RSA'),
+            (string) config('allinpay.orgid'),
+            (string) config('allinpay.cusid'),
+            (int) config('allinpay.timeout', 15),
+        );
+    }
 
     public function post(string $path, array $params): array
     {
+        $params['orgid'] = $params['orgid'] ?? $this->orgId;
+        $params['cusid'] = $params['cusid'] ?? $this->cusId;
         $params['appid'] = $params['appid'] ?? $this->appId;
         $params['version'] = $params['version'] ?? '11';
         $params['signtype'] = $params['signtype'] ?? $this->signType;
@@ -24,11 +50,11 @@ final class AllinpayClient
         $ch = curl_init(rtrim($this->baseUrl, '/') . $path);
         curl_setopt_array($ch, [
             CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => http_build_query($params),
+            CURLOPT_POSTFIELDS => http_build_query($params, '', '&', PHP_QUERY_RFC3986),
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_CONNECTTIMEOUT => 5,
-            CURLOPT_TIMEOUT => 20,
-            CURLOPT_HTTPHEADER => ['Content-Type: application/x-www-form-urlencoded'],
+            CURLOPT_CONNECTTIMEOUT => min(5, $this->timeout),
+            CURLOPT_TIMEOUT => $this->timeout,
+            CURLOPT_HTTPHEADER => ['Content-Type: application/x-www-form-urlencoded; charset=UTF-8'],
         ]);
         $body = curl_exec($ch);
         if ($body === false) throw new \RuntimeException('Allinpay request failed: ' . curl_error($ch));
