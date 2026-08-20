@@ -15,7 +15,7 @@ final class OrderCompletionService
 
     public function complete(string $tenantId, string $storeId, string $warehouseId, string $orderId): void
     {
-        DB::transaction(function () use ($tenantId, $storeId, $orderId): void {
+        DB::transaction(function () use ($tenantId, $storeId, $warehouseId, $orderId): void {
             $order = DB::table('orders')
                 ->where('id', $orderId)
                 ->where('tenant_id', $tenantId)
@@ -38,7 +38,7 @@ final class OrderCompletionService
                 throw new \RuntimeException('Only paid orders can be completed.');
             }
 
-            $this->inventoryDeduction->deduct($orderId);
+            $this->inventoryDeduction->deduct($orderId, $warehouseId);
 
             DB::table('orders')
                 ->where('id', $orderId)
