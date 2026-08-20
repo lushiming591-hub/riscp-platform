@@ -30,6 +30,9 @@ jobs:
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
 
+      - name: Prepare test runtime
+        run: mkdir -p bootstrap/cache storage/framework/{cache,sessions,views} storage/logs && chmod -R ug+rwX bootstrap/cache storage
+
       - name: Run tests
         run: php artisan test
 
