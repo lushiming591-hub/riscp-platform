@@ -29,7 +29,21 @@ final class PaymentTransactionService
     {
         $tx = DB::table('payment_transactions')->where('id', $transactionId)->first();
         if (!$tx) throw new \RuntimeException('Payment transaction not found.');
-        return DB::table('payment_callbacks')->insertOrIgnore(['id' => (string) Str::uuid(), 'provider_id' => $tx->provider_id, 'payment_transaction_id' => $transactionId, 'event_id' => $eventId, 'event_type' => 'payment.result', 'signature_status' => $signatureStatus, 'payload' => json_encode($raw, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), 'received_at' => now(), 'created_at' => now(), 'updated_at' => now()]) > 0;
+        if ($eventId === '') throw new \InvalidArgumentException('Callback event ID is required.');
+        if ($tx->provider_id === null || $tx->provider_id === '') throw new \RuntimeException('Payment transaction provider is required for callback idempotency.');
+
+        return DB::table('payment_callbacks')->insertOrIgnore([
+            'id' => (string) Str::uuid(),
+            'provider_id' => $tx->provider_id,
+            'payment_transaction_id' => $transactionId,
+            'event_id' => $eventId,
+            'event_type' => 'payment.result',
+            'signature_status' => $signatureStatus,
+            'payload' => json_encode($raw, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            'received_at' => now(),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]) > 0;
     }
 
     public function markPaid(string $transactionId, string $providerTradeNo, array $raw = [], ?string $eventId = null, string $signatureStatus = 'verified'): bool
@@ -39,8 +53,29 @@ final class PaymentTransactionService
         DB::transaction(function () use ($transactionId, $providerTradeNo, $raw, $eventId, $signatureStatus, &$event, &$changed): void {
             $tx = DB::table('payment_transactions as t')->leftJoin('payment_providers as p', 'p.id', '=', 't.provider_id')->where('t.id', $transactionId)->lockForUpdate()->select('t.*', 'p.code as provider_code')->first();
             if (!$tx) throw new \RuntimeException('Payment transaction not found.');
+            if ($tx->provider_id === null || $tx->provider_id === '') throw new \RuntimeException('Payment transaction provider is required for callback idempotency.');
+
+            if ($eventId !== null) {
+                if ($eventId === '') throw new \InvalidArgumentException('Callback event ID is required.');
+                DB::table('payment_callbacks')->insertOrIgnore([
+                    'id' => (string) Str::uuid(),
+                    'provider_id' => $tx->provider_id,
+                    'payment_transaction_id' => $transactionId,
+                    'event_id' => $eventId,
+                    'event_type' => 'payment.succeeded',
+                    'signature_status' => $signatureStatus,
+                    'payload' => json_encode($raw, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                    'received_at' => now(),
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
+
+            // The callback is audited independently from the business transition.
+            // A new callback received after PAID is recorded but must never trigger
+            // a second completion event or move the transaction backwards.
             if ($tx->status === 'paid') return;
-            if ($eventId !== null) DB::table('payment_callbacks')->insertOrIgnore(['id' => (string) Str::uuid(), 'provider_id' => $tx->provider_id, 'payment_transaction_id' => $transactionId, 'event_id' => $eventId, 'event_type' => 'payment.succeeded', 'signature_status' => $signatureStatus, 'payload' => json_encode($raw, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), 'received_at' => now(), 'created_at' => now(), 'updated_at' => now()]);
+
             DB::table('payment_transactions')->where('id', $transactionId)->update(['status' => 'paid', 'provider_trade_no' => $providerTradeNo, 'paid_at' => now(), 'updated_at' => now(), 'provider_response' => json_encode($raw, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)]);
             DB::table('orders')->where('id', $tx->order_id)->where('status', 'pending')->update(['status' => 'paid', 'updated_at' => now()]);
             if ($eventId === null) DB::table('payment_callbacks')->insert(['id' => (string) Str::uuid(), 'provider_id' => $tx->provider_id, 'payment_transaction_id' => $transactionId, 'event_id' => hash('sha256', 'internal|' . $transactionId . '|' . $providerTradeNo), 'event_type' => 'payment.succeeded', 'signature_status' => 'internal', 'payload' => json_encode($raw, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), 'received_at' => now(), 'created_at' => now(), 'updated_at' => now()]);
