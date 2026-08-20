@@ -26,15 +26,24 @@ final class AllinpayClient
         if ($publicPath === '' || !is_readable($publicPath)) {
             throw new \RuntimeException('Allinpay public key is not configured or readable.');
         }
+
         return new self(
             (string) config('allinpay.base_url'),
             (string) config('allinpay.appid'),
-            new AllinpaySigner((string) file_get_contents($privatePath), (string) file_get_contents($publicPath)),
+            new AllinpaySigner(
+                (string) file_get_contents($privatePath),
+                (string) file_get_contents($publicPath),
+            ),
             (string) config('allinpay.sign_type', 'RSA'),
             (string) config('allinpay.orgid'),
             (string) config('allinpay.cusid'),
             (int) config('allinpay.timeout', 15),
         );
+    }
+
+    public function signer(): AllinpaySigner
+    {
+        return $this->signer;
     }
 
     public function post(string $path, array $params): array
@@ -56,15 +65,28 @@ final class AllinpayClient
             CURLOPT_TIMEOUT => $this->timeout,
             CURLOPT_HTTPHEADER => ['Content-Type: application/x-www-form-urlencoded; charset=UTF-8'],
         ]);
+
         $body = curl_exec($ch);
-        if ($body === false) throw new \RuntimeException('Allinpay request failed: ' . curl_error($ch));
+        if ($body === false) {
+            $error = curl_error($ch);
+            curl_close($ch);
+            throw new \RuntimeException('Allinpay request failed: ' . $error);
+        }
+
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
-        if ($httpCode < 200 || $httpCode >= 300) throw new \RuntimeException('Allinpay HTTP error: ' . $httpCode);
+
+        if ($httpCode < 200 || $httpCode >= 300) {
+            throw new \RuntimeException('Allinpay HTTP error: ' . $httpCode);
+        }
 
         parse_str($body, $result);
-        if (!$result) $result = json_decode($body, true) ?: [];
-        if (!$result) throw new \RuntimeException('Allinpay returned an empty response.');
+        if (!$result) {
+            $result = json_decode($body, true) ?: [];
+        }
+        if (!$result) {
+            throw new \RuntimeException('Allinpay returned an empty response.');
+        }
 
         if (!empty($result['sign'])) {
             $verifyParams = $result;
@@ -73,6 +95,7 @@ final class AllinpayClient
                 throw new \RuntimeException('Allinpay response signature verification failed.');
             }
         }
+
         return $result;
     }
 }
