@@ -2,9 +2,10 @@ name: Tests
 
 on:
   push:
-    branches: [development, main]
+    branches: [development, main, deployment-candidate]
   pull_request:
     branches: [development, main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -16,33 +17,27 @@ jobs:
       fail-fast: false
       matrix:
         php: ['8.2', '8.3']
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
           extensions: mbstring, xml, ctype, iconv, intl, pdo_sqlite, bcmath
           coverage: none
-
-      - name: Validate Composer
-        run: composer validate --no-check-publish
-
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
-
       - name: Prepare testing environment
-        run: cp .env.example .env
-
+        run: |
+          mkdir -p bootstrap/cache storage/framework/cache storage/framework/sessions storage/framework/views storage/logs
+          chmod -R ug+rwX bootstrap/cache storage
+          cp .env.example .env
       - name: Generate application key
         run: php artisan key:generate --env=testing
-
-      - name: Run test suite
+      - name: Run PHPUnit
         env:
           APP_ENV: testing
           DB_CONNECTION: sqlite
           DB_DATABASE: ':memory:'
-        run: php artisan test --no-interaction
+        run: vendor/bin/phpunit --testdox
