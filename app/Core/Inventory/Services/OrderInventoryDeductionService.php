@@ -17,17 +17,19 @@ final class OrderInventoryDeductionService
         private readonly InventoryDeductionGuard $guard,
     ) {}
 
-    public function deduct(int|string $orderId): void
+    public function deduct(int|string $orderId, int|string|null $warehouseId = null): void
     {
-        DB::transaction(function () use ($orderId): void {
-            if ($this->guard->alreadyDeducted($orderId)) return;
+        DB::transaction(function () use ($orderId, $warehouseId): void {
+            if ($this->guard->alreadyDeducted($orderId)) {
+                return;
+            }
 
             $requirements = $this->recipeResolver->requirementsForOrder($orderId);
             if ($requirements === []) {
                 throw new \RuntimeException('No inventory requirements resolved for order: ' . $orderId);
             }
 
-            $this->ledger->deductForOrder($orderId, $requirements);
+            $this->ledger->deductForOrder($orderId, $requirements, $warehouseId);
             $this->guard->markDeducted($orderId);
         });
     }
