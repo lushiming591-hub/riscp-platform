@@ -11,7 +11,10 @@ final class AllinpayCallbackHandler
     public function handle(array $payload): array
     {
         $sign = (string) ($payload['sign'] ?? '');
-        if ($sign === '') throw new \RuntimeException('Allinpay callback signature is missing.');
+        if ($sign === '') {
+            throw new \RuntimeException('Allinpay callback signature is missing.');
+        }
+
         $verify = $payload;
         unset($verify['sign']);
         if (!$this->signer->verify($verify, $sign)) {
@@ -21,14 +24,16 @@ final class AllinpayCallbackHandler
         $trxstatus = (string) ($payload['trxstatus'] ?? '');
         $status = match ($trxstatus) {
             '0000' => 'paid',
-            '2000' => 'processing',
+            '2000', '' => 'processing',
             default => 'failed',
         };
 
         return [
             'status' => $status,
             'provider_trade_no' => $payload['trxid'] ?? null,
-            'merchant_trade_no' => $payload['cusorderid'] ?? null,
+            // Allinpay unified transaction notifications use reqsn as the
+            // merchant transaction number.
+            'merchant_trade_no' => $payload['reqsn'] ?? null,
             'amount' => isset($payload['trxamt']) ? ((int) $payload['trxamt']) / 100 : null,
             'fee' => isset($payload['fee']) ? ((int) $payload['fee']) / 100 : null,
             'raw' => $payload,
