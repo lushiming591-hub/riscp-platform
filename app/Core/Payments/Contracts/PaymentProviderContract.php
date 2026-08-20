@@ -14,6 +14,10 @@ interface PaymentProviderContract
 
     public function query(array $request): array;
 
+    public function confirmQuery(array $request): array;
+
+    public function closeNative(array $request): array;
+
     public function refund(array $request): array;
 
     public function verifyCallback(array $payload, array $headers = []): bool;
