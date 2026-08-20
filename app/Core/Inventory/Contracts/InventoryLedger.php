@@ -7,5 +7,5 @@ namespace App\Core\Inventory\Contracts;
 interface InventoryLedger
 {
     /** @param array<int,array{material_id:int|string,quantity:float,unit:string}> $requirements */
-    public function deductForOrder(int|string $orderId, array $requirements): void;
+    public function deductForOrder(int|string $orderId, array $requirements, int|string|null $warehouseId = null): void;
 }
